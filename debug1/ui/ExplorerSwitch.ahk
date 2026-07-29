@@ -20,6 +20,9 @@ class ExplorerSwitch {
     ; hwnd -> 1..9。ピン留め中は番号を固定し、再起動時にはリセットする。
     static FavoriteNumbers := Map()
     static LayoutSlots := Map()
+    ; ルールパス -> ラベル。パス自身と配下に適用し、INIで永続化する。
+    static PathLabels := Map()
+    static _labelEditor := 0
     static ImageListId := 0
     static IconIndexes := Map()
     static _hotifFn := ""
@@ -75,6 +78,11 @@ class ExplorerSwitch {
     static CDDS_ITEMPREPAINT := 0x00010001
     static CDRF_NOTIFYITEMDRAW := 0x00000020
     static MINIMIZED_TEXT_COLOR := 0x888888
+    ; COLORREFは0x00BBGGRR。RGBの#0066CCに相当する青でネットワーク行を示す。
+    static NETWORK_TEXT_COLOR := 0xCC6600
+    static DRIVE_REMOTE := 4
+    static SIID_DRIVENET := 9
+    static SHGSI_ICON_SMALL := 0x101  ; SHGSI_ICON | SHGSI_SMALLICON
 
     static Init() {
         if this._initialized
@@ -84,6 +92,7 @@ class ExplorerSwitch {
         this.KeepOpenAfterActivate := this._ReadSetting("KeepOpenAfterActivate",
             this.KeepOpenAfterActivate)
         this.IncludeApps := this._ReadSetting("IncludeApps", this.IncludeApps)
+        this._LoadPathLabels()
 
         this._hotifFn := (*) => this.GuiObj
             && this._GuiExists()
@@ -100,6 +109,7 @@ class ExplorerSwitch {
         Hotkey("Escape", (*) => this.HandleEscape(), "On")
         Hotkey("Enter", (*) => this.ActivateSelected(), "On")
         Hotkey("+Enter", (*) => this.ToggleSelectedVisibility(), "On")
+        Hotkey("F2", (*) => this.EditSelectedPathLabel(), "On")
         Hotkey("F5", (*) => this.ForceRefresh(), "On")
         Hotkey("^f", (*) => this.FocusSearch(), "On")
         Hotkey("^c", (*) => this.CopySelectedPath(), "On")
@@ -319,12 +329,13 @@ class ExplorerSwitch {
             duplicateMark := item.duplicateCount > 1 ? "  [x" . item.duplicateCount . "]" : ""
             favoriteNumber := this._GetFavoriteNumber(item.hwnd)
             pinMark := favoriteNumber ? "[" . favoriteNumber . "] " : ""
+            labelMark := item.label != "" ? item.label . "  " : ""
             minimizeText := item.isMinimized ? "🗗" : "🗕"
             isExplorer := item.kind == "explorer"
             detail := isExplorer ? item.path : item.title
             iconIndex := this._GetItemIconIndex(item)
             rowOptions := iconIndex > 0 ? "Icon" . iconIndex : ""
-            lv.Add(rowOptions, pinMark . item.displayName . duplicateMark,
+            lv.Add(rowOptions, pinMark . labelMark . item.displayName . duplicateMark,
                 minimizeText, isExplorer ? this._GetLayoutSlotIcon(item.hwnd) : "",
                 detail)
             if (preferredHwnd && item.hwnd == preferredHwnd)
@@ -386,6 +397,176 @@ class ExplorerSwitch {
         if !this._GuiExists()
             return
         try this.GuiObj["Search"].Focus()
+    }
+
+    static EditSelectedPathLabel() {
+        item := this._GetSelectedItem()
+        if !item
+            return
+        if (item.kind != "explorer" || !item.isFileSystem) {
+            this._SetStatus("名前を付けられるのはフォルダーパスを持つ行だけです")
+            return
+        }
+        this._ShowLabelEditor(item.path)
+    }
+
+    static _ShowLabelEditor(path) {
+        this._CloseLabelEditor(false)
+        ; 既存ルールの配下なら、新しい重複ルールを作らずそのルール自体を編集する。
+        rulePath := this._FindRuleForPath(path)
+        editPath := rulePath != "" ? rulePath : path
+        editLabel := rulePath != "" ? this.PathLabels[rulePath] : ""
+
+        ; エディター表示中は外側クリック判定と一覧の作り直しを止める。
+        this._suspendAutoCloseUntil := A_TickCount + 600000
+        this._StopRefreshTimer()
+
+        ed := Gui("+AlwaysOnTop +ToolWindow +Owner" . this.GuiObj.Hwnd,
+            "パスに名前を付ける")
+        ed.SetFont("s10", "Yu Gothic UI")
+        ed.MarginX := 12
+        ed.MarginY := 10
+        ed.Add("Text", "xm", "対象パス（親階層まで削ると、その配下すべてに適用）")
+        ed.Add("Edit", "xm w560 vLabelPath", editPath)
+        ed.Add("Text", "xm y+8", "名前（空で保存すると削除）")
+        ed.Add("Edit", "xm w280 vLabelName", editLabel)
+        saveButton := ed.Add("Button", "xm y+12 w110 Default", "保存")
+        deleteButton := ed.Add("Button", "x+8 yp w110", "削除")
+        cancelButton := ed.Add("Button", "x+8 yp w110", "キャンセル")
+        ; 削除は既存ルールを開いている時だけ意味を持つ。
+        if (rulePath == "")
+            deleteButton.Enabled := false
+        saveButton.OnEvent("Click", (*) => this._SaveLabelFromEditor())
+        deleteButton.OnEvent("Click", (*) => this._DeleteLabelFromEditor())
+        cancelButton.OnEvent("Click", (*) => this._CloseLabelEditor())
+        ed.OnEvent("Close", (*) => this._CloseLabelEditor())
+        ed.OnEvent("Escape", (*) => this._CloseLabelEditor())
+        this._labelEditor := ed
+        ; 既定のShowは画面中央に出るため、マウス脇で開いたSwitcherから離れた
+        ; 位置に表示されてしまう。サイズ確定後にSwitcherの中央へ重ねる。
+        ; エディターはSwitcherより小さいので、この位置なら必ず画面内に収まる。
+        ed.Show("AutoSize Hide")
+        edRect := Buffer(16, 0)
+        DllCall("user32\GetWindowRect", "ptr", ed.Hwnd, "ptr", edRect)
+        edWidth := NumGet(edRect, 8, "int") - NumGet(edRect, 0, "int")
+        edHeight := NumGet(edRect, 12, "int") - NumGet(edRect, 4, "int")
+        ownerRect := Buffer(16, 0)
+        DllCall("user32\GetWindowRect", "ptr", this.GuiObj.Hwnd, "ptr", ownerRect)
+        ownerLeft := NumGet(ownerRect, 0, "int")
+        ownerTop := NumGet(ownerRect, 4, "int")
+        ownerWidth := NumGet(ownerRect, 8, "int") - ownerLeft
+        ownerHeight := NumGet(ownerRect, 12, "int") - ownerTop
+        ed.Show("x" . (ownerLeft + (ownerWidth - edWidth) // 2)
+            . " y" . (ownerTop + (ownerHeight - edHeight) // 2))
+        ed["LabelName"].Focus()
+    }
+
+    static _SaveLabelFromEditor() {
+        ed := this._labelEditor
+        if !ed
+            return
+        rulePath := this._NormalizePath(Trim(ed["LabelPath"].Value))
+        label := Trim(ed["LabelName"].Value)
+        if (rulePath == "")
+            return
+
+        ; 大文字小文字違いの同一パスを二重登録しない。
+        storedKey := ""
+        for existingPath in this.PathLabels {
+            if (StrCompare(existingPath, rulePath, false) == 0) {
+                storedKey := existingPath
+                break
+            }
+        }
+
+        message := ""
+        if (label == "") {
+            if (storedKey != "") {
+                this.PathLabels.Delete(storedKey)
+                try IniDelete(this.IniPath, "PathLabels", storedKey)
+                message := "名前を削除しました: " . rulePath
+            }
+        } else {
+            if (storedKey != "" && storedKey != rulePath) {
+                this.PathLabels.Delete(storedKey)
+                try IniDelete(this.IniPath, "PathLabels", storedKey)
+            }
+            this.PathLabels[rulePath] := label
+            try IniWrite(label, this.IniPath, "PathLabels", rulePath)
+            message := "「" . label . "」を設定しました: " . rulePath
+        }
+
+        this._CloseLabelEditor()
+        this.Refresh()
+        if (message != "")
+            this._SetStatus(message)
+    }
+
+    ; パス欄に表示中のルールを削除する。名前を空にした保存と同じ経路に載せ、
+    ; 削除処理を一本化する。
+    static _DeleteLabelFromEditor() {
+        ed := this._labelEditor
+        if !ed
+            return
+        ed["LabelName"].Value := ""
+        this._SaveLabelFromEditor()
+    }
+
+    static _CloseLabelEditor(refocus := true) {
+        ed := this._labelEditor
+        this._labelEditor := 0
+        if ed
+            try ed.Destroy()
+        if !refocus
+            return
+        this._suspendAutoCloseUntil := A_TickCount + 200
+        if (this._GuiExists()
+            && DllCall("user32\IsWindowVisible", "ptr", this.GuiObj.Hwnd)) {
+            this._StartRefreshTimer()
+            this.FocusSearch()
+        }
+    }
+
+    static _LoadPathLabels() {
+        this.PathLabels := Map()
+        try section := IniRead(this.IniPath, "PathLabels")
+        catch
+            return
+        for line in StrSplit(section, "`n", "`r") {
+            separatorPos := InStr(line, "=")
+            if !separatorPos
+                continue
+            rulePath := this._NormalizePath(Trim(SubStr(line, 1, separatorPos - 1)))
+            label := Trim(SubStr(line, separatorPos + 1))
+            if (rulePath != "" && label != "")
+                this.PathLabels[rulePath] := label
+        }
+    }
+
+    ; pathに適用されるルールのパスを返す。複数マッチ時は最長一致を優先し、
+    ; 深い階層のルールが浅いルールを上書きできるようにする。
+    static _FindRuleForPath(path) {
+        bestRule := ""
+        bestLength := 0
+        lowerPath := StrLower(path)
+        for rulePath in this.PathLabels {
+            lowerRule := StrLower(rulePath)
+            ; パス境界で比較し、"...\folder" が "...\folder2" に誤マッチしない。
+            prefix := SubStr(lowerRule, -1) == "\" ? lowerRule : lowerRule . "\"
+            if ((lowerPath == lowerRule || InStr(lowerPath, prefix) == 1)
+                && StrLen(lowerRule) > bestLength) {
+                bestRule := rulePath
+                bestLength := StrLen(lowerRule)
+            }
+        }
+        return bestRule
+    }
+
+    static _GetPathLabel(path) {
+        if (this.PathLabels.Count == 0)
+            return ""
+        rulePath := this._FindRuleForPath(path)
+        return rulePath != "" ? this.PathLabels[rulePath] : ""
     }
 
     static HandleEscape() {
@@ -686,14 +867,46 @@ class ExplorerSwitch {
             "◥  右上  (Ctrl+2)", "◣  左下  (Ctrl+3)", "◢  右下  (Ctrl+4)"]
         slotMenu.Check(labels[current + 1])
 
-        ; ポップアップメニューを外側クリックと誤認してSwitcherを閉じない。
+        this._ShowGuardedMenu(slotMenu)
+    }
+
+    ; ポップアップメニューを外側クリックと誤認してSwitcherを閉じないよう抑制し、
+    ; 表示中は一覧も作り直さない。メニューからラベルエディターが開かれた場合は
+    ; 再開するとエディター表示中に自動クローズが復活するため、エディター側の
+    ; 閉じ処理に委ねる。
+    static _ShowGuardedMenu(menu, x?, y?) {
         this._suspendAutoCloseUntil := A_TickCount + 60000
-        ; メニューが開いている間は一覧を作り直さない。
         this._StopRefreshTimer()
-        slotMenu.Show()
+        menu.Show(x?, y?)
+        if this._labelEditor
+            return
         this._StartRefreshTimer()
         this._suspendAutoCloseUntil := A_TickCount + 200
         this.FocusSearch()
+    }
+
+    static _ShowRowContextMenu(row, x, y) {
+        if (row < 1 || row > this.FilteredItems.Length) {
+            this.FocusSearch()
+            return
+        }
+        this.GuiObj["Results"].Modify(row, "Select Focus")
+        item := this.FilteredItems[row]
+        hasFolderPath := item.kind == "explorer" && item.isFileSystem
+
+        rowMenu := Menu()
+        rowMenu.Add("パスに名前を付ける...`tF2", (*) => this.EditSelectedPathLabel())
+        rowMenu.Add("パスをコピー`tCtrl+C", (*) => this.CopySelectedPath())
+        rowMenu.Add("ピン留め/解除`tCtrl+P", (*) => this.TogglePin())
+        rowMenu.Add()
+        rowMenu.Add("重複を閉じる`tCtrl+Del", (*) => this.CloseDuplicates())
+        if !hasFolderPath {
+            ; 仮想フォルダーとアプリ行では、パスを前提とする操作を選べなくする。
+            rowMenu.Disable("1&")
+            rowMenu.Disable("2&")
+            rowMenu.Disable("5&")
+        }
+        this._ShowGuardedMenu(rowMenu, x, y)
     }
 
     static AssignRowLayoutSlot(row, slot) {
@@ -769,14 +982,25 @@ class ExplorerSwitch {
     static _GetItemIconIndex(item) {
         if !this.ImageListId
             return 0
-        key := item.kind == "explorer" ? "explorer" : "app|" . StrLower(item.path)
+        isNetworkExplorer := item.kind == "explorer" && item.isNetwork
+        key := item.kind == "explorer"
+            ? (isNetworkExplorer ? "explorer-net" : "explorer")
+            : "app|" . StrLower(item.path)
         if this.IconIndexes.Has(key)
             return this.IconIndexes[key]
 
-        iconFile := item.kind == "explorer" ? A_WinDir . "\explorer.exe" : item.path
         iconIndex := 0
-        if (iconFile != "" && FileExist(iconFile))
-            try iconIndex := IL_Add(this.ImageListId, iconFile)
+        if isNetworkExplorer {
+            iconIndex := this._AddStockIcon(this.SIID_DRIVENET)
+            ; shell32の10番はレガシー固定のネットワークドライブアイコン。
+            if (iconIndex == 0)
+                try iconIndex := IL_Add(this.ImageListId,
+                    A_WinDir . "\System32\shell32.dll", 10)
+        } else {
+            iconFile := item.kind == "explorer" ? A_WinDir . "\explorer.exe" : item.path
+            if (iconFile != "" && FileExist(iconFile))
+                try iconIndex := IL_Add(this.ImageListId, iconFile)
+        }
         if (iconIndex == 0) {
             fallbackKey := "fallback"
             if this.IconIndexes.Has(fallbackKey)
@@ -788,6 +1012,25 @@ class ExplorerSwitch {
         }
         this.IconIndexes[key] := iconIndex
         return iconIndex
+    }
+
+    ; OS標準のストックアイコンをImageListへ追加し、1始まりのインデックスを返す。
+    ; 失敗時は0。取得したHICONはImageList側へコピーされるため破棄してよい。
+    static _AddStockIcon(stockIconId) {
+        ; SHSTOCKICONINFO: cbSize, hIcon, iSysImageIndex, iIcon, szPath[260]
+        info := Buffer(A_PtrSize == 8 ? 544 : 536, 0)
+        NumPut("uint", info.Size, info, 0)
+        hr := DllCall("shell32\SHGetStockIconInfo", "uint", stockIconId,
+            "uint", this.SHGSI_ICON_SMALL, "ptr", info, "uint")
+        if (hr != 0)
+            return 0
+        hIcon := NumGet(info, A_PtrSize == 8 ? 8 : 4, "ptr")
+        if !hIcon
+            return 0
+        iconIndex := DllCall("comctl32\ImageList_ReplaceIcon",
+            "ptr", this.ImageListId, "int", -1, "ptr", hIcon, "int") + 1
+        DllCall("user32\DestroyIcon", "ptr", hIcon)
+        return iconIndex > 0 ? iconIndex : 0
     }
 
     static _SetListColumnOrder(lv) {
@@ -923,7 +1166,7 @@ class ExplorerSwitch {
 
         search := guiObj.Add("Edit", "xm ym w796 vSearch")
         try DllCall("user32\SendMessageW", "ptr", search.Hwnd, "uint", this.EM_SETCUEBANNER,
-            "ptr", 1, "wstr", "名前・パス・タイトルを検索（空白区切りでAND検索）", "ptr")
+            "ptr", 1, "wstr", "名前・ラベル・パス・タイトルを検索（空白区切りでAND検索）", "ptr")
 
         guiObj.SetFont("s9", "Yu Gothic UI")
         closeOnBlur := guiObj.Add("Checkbox", "xm y+7 w175 vCloseOnFocusLossCheck",
@@ -957,7 +1200,7 @@ class ExplorerSwitch {
             "Ctrl+F 検索  ·  ↑↓ 選択  ·  Enter 切替  ·  Shift+Enter 最小化/復元  ·  Ctrl+C コピー  ·  Ctrl+P 登録  ·  1–9 切替"
             . "`nCtrl+M 全最小化  ·  Ctrl+Del 重複終了  ·  Ctrl+1–4 配置指定  ·  Ctrl+0 解除"
             . "  ·  Ctrl+G 整列  ·  F5 更新"
-            . "`nCtrl+Shift+1–9 番号変更  ·  Ctrl+Shift+P 全解除  ·  Esc クリア/閉じる")
+            . "`nF2 パスに名前  ·  右クリック メニュー  ·  Ctrl+Shift+1–9 番号変更  ·  Ctrl+Shift+P 全解除  ·  Esc クリア/閉じる")
 
         this.GuiObj := guiObj
         search.OnEvent("Change", (ctrl, *) => this._OnSearchChanged(ctrl.Value))
@@ -967,6 +1210,8 @@ class ExplorerSwitch {
         arrange.OnEvent("Click", (*) => this.ArrangeOnCurrentMonitors())
         lv.OnEvent("Click", (ctrl, row) => this._HandleListClick(ctrl, row))
         lv.OnEvent("DoubleClick", (ctrl, row) => this._HandleListDoubleClick(ctrl, row))
+        lv.OnEvent("ContextMenu",
+            (ctrl, row, rightClick, x, y) => this._ShowRowContextMenu(row, x, y))
         lv.OnEvent("ColClick", (ctrl, column) => this._HandleColumnClick(column))
         guiObj.OnEvent("Close", (*) => this.Hide())
         guiObj.OnEvent("Escape", (*) => this.HandleEscape())
@@ -1041,12 +1286,18 @@ class ExplorerSwitch {
         itemOffset := A_PtrSize == 8 ? 56 : 36
         colorOffset := A_PtrSize == 8 ? 80 : 48
         row := NumGet(lParam, itemOffset, "uptr") + 1
-        if (row < 1 || row > this.FilteredItems.Length
-            || !this.FilteredItems[row].isMinimized)
+        if (row < 1 || row > this.FilteredItems.Length)
             return
+        item := this.FilteredItems[row]
 
-        ; COLORREFは0x00BBGGRR。グレーはRGB/BGRが同値。
-        NumPut("uint", this.MINIMIZED_TEXT_COLOR, lParam, colorOffset)
+        ; 「今操作できるか」を種別より優先し、最小化グレーをネットワーク青より
+        ; 上に置く。どちらでもなければ既定色のまま描画させる。
+        if item.isMinimized
+            NumPut("uint", this.MINIMIZED_TEXT_COLOR, lParam, colorOffset)
+        else if item.isNetwork
+            NumPut("uint", this.NETWORK_TEXT_COLOR, lParam, colorOffset)
+        else
+            return
         ; 色指定だけなら既定描画へ戻す。CDRF_NEWFONTを返すと環境によって
         ; ListView側がclrTextを既定色で上書きすることがある。
         return 0
@@ -1154,6 +1405,7 @@ class ExplorerSwitch {
                     path := cached.path
                     displayName := cached.displayName
                     isFileSystem := cached.isFileSystem
+                    isNetwork := cached.isNetwork
                 } else {
                     try locationName := Trim(window.LocationName)
                     catch
@@ -1176,8 +1428,10 @@ class ExplorerSwitch {
                             displayName := "Explorer"
                         path := locationName != "" ? locationName : displayName
                     }
+                    isNetwork := isFileSystem && this._IsNetworkPath(path)
                     this._pathCache[hwnd] := {title: title, path: path,
-                        displayName: displayName, isFileSystem: isFileSystem}
+                        displayName: displayName, isFileSystem: isFileSystem,
+                        isNetwork: isNetwork}
                 }
 
                 rank := zRanks.Has(hwnd) ? zRanks[hwnd] : 100000 + items.Length
@@ -1186,8 +1440,11 @@ class ExplorerSwitch {
                     kind: "explorer",
                     title: title,
                     path: path,
+                    ; ルール変更を即反映させるため、キャッシュに入れず毎回引き直す。
+                    label: isFileSystem ? this._GetPathLabel(path) : "",
                     displayName: displayName,
                     isFileSystem: isFileSystem,
+                    isNetwork: isNetwork,
                     isMinimized: WinGetMinMax("ahk_id " . hwnd) == -1,
                     isPinned: false,
                     duplicateCount: 1,
@@ -1268,8 +1525,10 @@ class ExplorerSwitch {
                     kind: "app",
                     title: title,
                     path: exePath,
+                    label: "",
                     displayName: displayName,
                     isFileSystem: false,
+                    isNetwork: false,
                     isMinimized: WinGetMinMax("ahk_id " . hwnd) == -1,
                     isPinned: false,
                     duplicateCount: 1,
@@ -1310,6 +1569,7 @@ class ExplorerSwitch {
             left := leftByHwnd[right.hwnd]
             if (left.kind != right.kind
                 || StrCompare(left.path, right.path, false) != 0
+                || left.label != right.label
                 || left.displayName != right.displayName
                 || left.title != right.title
                 || left.isPinned != right.isPinned
@@ -1346,6 +1606,7 @@ class ExplorerSwitch {
     static _ItemMatchesTokens(item, tokens) {
         for token in tokens {
             if !(InStr(item.displayName, token, false)
+                || (item.label != "" && InStr(item.label, token, false))
                 || InStr(item.path, token, false)
                 || InStr(item.title, token, false))
                 return false
@@ -1418,6 +1679,17 @@ class ExplorerSwitch {
         ; DirExistは切断中のネットワークパスで待たされるため、Explorerが返した
         ; ドライブパスまたはUNC/拡張パスであることだけを軽量に確認する。
         return RegExMatch(path, "i)^[A-Z]:\\") || SubStr(path, 1, 2) == "\\"
+    }
+
+    static _IsNetworkPath(path) {
+        if (SubStr(path, 1, 2) == "\\")
+            return true
+        ; GetDriveTypeはマウント情報の参照だけで、切断中のネットワークドライブ
+        ; でもブロックしないため、列挙のたびに直接呼んでよい。
+        if RegExMatch(path, "i)^[A-Z]:\\")
+            return DllCall("kernel32\GetDriveTypeW", "wstr", SubStr(path, 1, 3),
+                "uint") == this.DRIVE_REMOTE
+        return false
     }
 
     static _IsExplorerWindow(hwnd) {
