@@ -1567,7 +1567,11 @@ class ExplorerSwitch {
             if !leftByHwnd.Has(right.hwnd)
                 return false
             left := leftByHwnd[right.hwnd]
+            ; rankも比較する。開いた直後はキャッシュ由来の古いZ順とorder lockの
+            ; 新しい順位が食い違うため、ここで「変化あり」となり並び直しが
+            ; 描画に反映される。表示中はlockがrankを固定するので毎秒は動かない。
             if (left.kind != right.kind
+                || left.rank != right.rank
                 || StrCompare(left.path, right.path, false) != 0
                 || left.label != right.label
                 || left.displayName != right.displayName
