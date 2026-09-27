@@ -53,6 +53,19 @@ class NaviFilter {
     ; UNC パス（\\server\share）かどうかを返す
     static _IsNetworkPath(path) => (SubStr(path, 1, 2) == "\\")
 
+    ; ネットワーク上のフォルダか（UNC パスか、ネットワークドライブに割り当てたドライブ文字）
+    static IsOnNetwork(path) {
+        if this._IsNetworkPath(path)
+            return true
+        if !RegExMatch(path, "^[A-Za-z]:")
+            return false
+        try {
+            return DriveGetType(SubStr(path, 1, 2) . "\") == "Network"
+        } catch {
+            return false  ; 存在しないドライブ
+        }
+    }
+
     ; ==============================================================================
     ; フォルダインデックス構築
     ; ==============================================================================
