@@ -32,6 +32,7 @@
 #Include *i Navi.KeyMenu.ahk
 #Include *i Navi.Leader.ahk
 #Include *i Navi.Picker.ahk
+#Include *i Navi.ViewSwitch.ahk
 #Include ..\..\lib\TempCopy.ahk
 
 class Navi {
@@ -112,6 +113,7 @@ class Navi {
         NaviMark.Init(this)
         NaviDirList.Init(this)
         NaviBrowse.Init(this)
+        NaviViewSwitch.Init(this)
         NaviLeader.Init(this)
     }
 
@@ -239,6 +241,7 @@ class Navi {
         NaviDirList.Build(this.GuiObj, tv)
         ; --- 3 列ブラウズ（ツリーと同じ場所に重ね、Ctrl+B で切り替え）---
         NaviBrowse.Build(this.GuiObj, tv)
+        NaviViewSwitch.Build(this.GuiObj)
 
         ; --- ルート登録用の入力欄 ---
         ; 常に出すと 2 つ目の検索欄に見えて迷うので表示しない。ルートの追加は ⚙ →「ルートを追加」の小窓で
@@ -347,7 +350,7 @@ class Navi {
         ; 一覧の作成は WinExist が通る表示後に行う
         NaviDirList.ApplyCurrent()
         if (NaviBrowse.Active) {
-            NaviBrowse.Open(NaviBrowse._RootPath())
+            NaviBrowse.OpenTabLocation()  ; 閉じたときに 3 列で開いていた場所から始める
         }
         ; GUI 表示後に選択項目を再度可視化（フィルタの非同期処理を考慮して複数回リトライ）
         this._EnsureSelectionVisibleRetries := 0
@@ -505,7 +508,7 @@ class Navi {
               Ctrl+;        コマンド一覧（1 文字で実行）
               Ctrl+E        ツリー ↔ 一覧
               Ctrl+B        ツリー ↔ 3 列ブラウズ（←→ で上がる・入る）
-              Ctrl+Shift+B  今のフォルダを一時的なルートにしてツリーで表示
+              Ctrl+Shift+B  今のフォルダをルートとして開く（一時的。ルートの一覧には登録しない）
               Ctrl+H/J/K/L  ←↓↑→（Vim と同じ）
 
             【一覧】
@@ -526,8 +529,9 @@ class Navi {
               Ctrl+Tab      次のタブへ
               Ctrl+Shift+Tab 前のタブへ
               Ctrl+1-5      タブ直接切り替え
-              Alt+←         タブ内でルート履歴を戻る
-              Alt+→         タブ内でルート履歴を進む
+              Alt+←         タブ内でルート履歴を戻る（3 列ではフォルダを戻る）
+              Alt+→         タブ内でルート履歴を進む（3 列ではフォルダを進む）
+              Alt+↑         3 列で 1 つ上のフォルダへ
               Ctrl+Shift+H  現在タブの履歴をクリア
 
             【その他】
@@ -1021,9 +1025,12 @@ class Navi {
             SetTimer(() => NaviDirList.ApplyCurrent(), -1)
         } else if (NaviBrowse.Active) {
             ; ルートが変わったので 3 列もそのルートを開く（フォーカスは入力欄へ）
+            ; ただし予約してから開くまでの間に 3 列がほかの場所を開いていたら（タブの切り替えで
+            ; そのタブの場所を開いたときなど）、そちらを優先して開かない
             if (setFocus)
                 this.GuiObj["TreeFilter"].Focus()
-            SetTimer(() => NaviBrowse.Open(rootPath), -1)
+            seq := NaviBrowse._openSeq
+            SetTimer(() => (NaviBrowse._openSeq == seq) ? NaviBrowse.Open(rootPath) : 0, -1)
         } else if (setFocus) {
             tv.Focus()
         }
@@ -1116,6 +1123,7 @@ class Navi {
 
 
     static _UpdateStatusBar() {
+        try NaviViewSwitch.Update()  ; 表示を切り替えるたびにここを通るので、表示切り替えのボタンも合わせる
         try {
             sb := this.GuiObj._sbRef
             ; ピン留めのチェックボックスは表示しないので、状態はここに出す
