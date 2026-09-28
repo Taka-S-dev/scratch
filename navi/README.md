@@ -1,6 +1,6 @@
 # navi — My-AHK-Scripts の Navi を別の PC で試すための写し
 
-[My-AHK-Scripts](https://github.com/Taka-S-dev/my-ahk-scripts) の `feat/navi-list` ブランチ（`37b016d`）にある Navi（フォルダナビゲーター）をそのまま写したもの。
+[My-AHK-Scripts](https://github.com/Taka-S-dev/my-ahk-scripts) で開発中の Navi（フォルダナビゲーター）を、本体に入れる前に写したもの。
 別の PC でしばらく使って問題がなければ、本体のリポジトリの方を push する。ここで直したところは本体にも戻す。
 
 main から増えたもの:
