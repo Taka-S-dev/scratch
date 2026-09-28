@@ -1,6 +1,6 @@
 # navi — My-AHK-Scripts の Navi を別の PC で試すための写し
 
-[My-AHK-Scripts](https://github.com/Taka-S-dev/my-ahk-scripts) の `feat/navi-list` ブランチ（`0b3d5cd`）にある Navi（フォルダナビゲーター）をそのまま写したもの。
+[My-AHK-Scripts](https://github.com/Taka-S-dev/my-ahk-scripts) の `feat/navi-list` ブランチ（`37b016d`）にある Navi（フォルダナビゲーター）をそのまま写したもの。
 別の PC でしばらく使って問題がなければ、本体のリポジトリの方を push する。ここで直したところは本体にも戻す。
 
 main から増えたもの:
@@ -12,6 +12,7 @@ main から増えたもの:
   - 開いている場所はタブごとに覚え、Navi を開き直しても続きから
 - 表示の切り替えボタン（パスの行の右端。ツリー／一覧／3 列）
 - タブの閉じる `×`
+- `Ctrl+Space`（アプリケーションキー・`Shift+F10` でも）で、入力中でもアクションメニューを開ける
 - ルートがネットワーク上（`\\server\share` やネットワークドライブ）なら、一覧を作る前に確認する。裏での先読みや fd もしない
 - コマンド一覧（`Ctrl+;`）、`Ctrl+H/J/K/L` の矢印、見た目の統一（アイコン、角丸のメニュー、タブ）
 
