@@ -1,0 +1,18 @@
+# 許可リスト: ここに挙げたフォルダだけを追跡する（新しいフォルダを足すときは下に 1 行足す）
+/*
+!/.gitignore
+!/debug1/
+!/navi/
+!/td/
+!/wezterm-hang-diag/
+
+# 許可の後ろで、どのフォルダの中でも機密を拒否し直す
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+id_rsa*
+id_ed25519*
+secrets.*
+credentials.*
