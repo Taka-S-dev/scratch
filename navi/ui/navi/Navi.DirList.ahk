@@ -681,7 +681,7 @@ class NaviDirList {
             return false
         this.CancelFileIndex()
         ; ネットワークパスは fd を使わない（フォルダインデックスと同じくサーバー負荷対策）
-        useFd := !NaviFilter._IsNetworkPath(rootPath)
+        useFd := !NaviFilter.IsOnNetwork(rootPath)
             && (IniRead(NaviSearch.IniPath, "Search", "UseFdForFilter", "1") != "0")
         fdPath := useFd ? NaviSearch._FindFd() : ""
         if (fdPath != "" && this._StartFileIndexFd(rootPath, fdPath))

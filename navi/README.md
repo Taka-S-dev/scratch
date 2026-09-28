@@ -1,13 +1,13 @@
 # navi — My-AHK-Scripts の Navi を別の PC で試すための写し
 
-[My-AHK-Scripts](https://github.com/Taka-S-dev/my-ahk-scripts) の `feat/navi-list` ブランチ（`92b03fa`）にある Navi（フォルダナビゲーター）をそのまま写したもの。
+[My-AHK-Scripts](https://github.com/Taka-S-dev/my-ahk-scripts) の `feat/navi-list` ブランチ（`92b03fa`）にある Navi（フォルダナビゲーター）に、本体ではまだコミットしていない修正（ネットワークドライブの判定）を加えて写したもの。
 別の PC でしばらく使って問題がなければ、本体のリポジトリの方を push する。ここで直したところは本体にも戻す。
 
 main から増えたもの:
 
 - 一覧表示（`Ctrl+E`、`Shift+Tab` でフォルダ ↔ ファイル）とあいまい検索
 - 3 列ブラウズ（`Ctrl+B`）。`←` `→` で上がる・入る。`Ctrl+Shift+B` で今のフォルダを一時的なルートにしてツリーで表示
-- ルートがネットワーク上なら、一覧を作る前に確認する
+- ルートがネットワーク上（`\\server\share` やネットワークドライブ）なら、一覧を作る前に確認する。裏での先読みや fd もしない
 - コマンド一覧（`Ctrl+;`）、`Ctrl+H/J/K/L` の矢印、見た目の統一（アイコン、角丸のメニュー、タブ）
 
 キーの一覧は Navi の中で `F1`。
