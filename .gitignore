@@ -3,6 +3,7 @@
 !/.gitignore
 !/debug1/
 !/navi/
+!/nvim-trace/
 !/td/
 !/wezterm-hang-diag/
 
